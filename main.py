@@ -35,7 +35,7 @@ SMALL_EXPL = pygame.image.load("assets/small_explosion.png").convert_alpha()
 # ---------------------------------------------------------
 # FONTS
 # ---------------------------------------------------------
-TITLE_FONT = pygame.font.Font("assets/fonts/PressStart2P.ttf", 65)
+TITLE_FONT = pygame.font.Font("assets/fonts/PressStart2P.ttf", 72)
 BUTTON_FONT = pygame.font.Font("assets/fonts/PressStart2P.ttf", 32)
 STAT_FONT = pygame.font.Font("assets/fonts/PressStart2P.ttf", 28)
 GAMEOVER_FONT = pygame.font.Font("assets/fonts/PressStart2P.ttf", 64)
@@ -80,6 +80,7 @@ pause_start = 0
 invincible = False
 inv_timer = 0
 
+
 # ---------------------------------------------------------
 # BUTTON CLASS (ANIMATED)
 # ---------------------------------------------------------
@@ -111,6 +112,26 @@ class Button:
         WIN.blit(scaled, (self.center_x - scaled.get_width()//2, self.y))
 
         return rect
+
+
+# ---------------------------------------------------------
+# PLANET PLACEMENT CHECK — NO MERGING
+# ---------------------------------------------------------
+def can_place_planet(new_x, new_y, sprite):
+    nw, nh = sprite.get_width(), sprite.get_height()
+    new_rect = pygame.Rect(new_x, new_y, nw, nh)
+
+    for px, py, spr in planets:
+        pw, ph = spr.get_width(), spr.get_height()
+        p_rect = pygame.Rect(px, py, pw, ph)
+
+        if new_rect.colliderect(p_rect):
+            return False
+
+        if abs(new_x - px) < (nw//2 + pw//2 + 100) and abs(new_y - py) < (nh//2 + ph//2 + 100):
+            return False
+
+    return True
 
 
 # ---------------------------------------------------------
@@ -171,11 +192,11 @@ def update_pause(px, py):
 
 
 # ---------------------------------------------------------
-# HOMEPAGE SCREEN
+# HOMEPAGE
 # ---------------------------------------------------------
 def homepage_screen():
-    play_button = Button("PLAY", 350)
-    stats_button = Button("VIEW STATS", 450)
+    play_btn = Button("PLAY", 350)
+    stats_btn = Button("VIEW STATS", 450)
 
     while True:
         WIN.blit(HOMEPAGE, (0, 0))
@@ -183,8 +204,8 @@ def homepage_screen():
         title = TITLE_FONT.render("SPACE ATTACK", True, (255, 255, 255))
         WIN.blit(title, (WIDTH//2 - title.get_width()//2, 120))
 
-        play_rect = play_button.draw()
-        stats_rect = stats_button.draw()
+        play_rect = play_btn.draw()
+        stats_rect = stats_btn.draw()
 
         pygame.display.update()
 
@@ -201,7 +222,7 @@ def homepage_screen():
 
 
 # ---------------------------------------------------------
-# GAME OVER SCREEN (centered, same homepage bg)
+# GAME OVER SCREEN
 # ---------------------------------------------------------
 def game_over_screen(final_score, final_kills):
 
@@ -238,7 +259,7 @@ def game_over_screen(final_score, final_kills):
 
 
 # ---------------------------------------------------------
-# STATS SCREEN (animated BACK button)
+# STATS SCREEN
 # ---------------------------------------------------------
 def stats_screen():
 
@@ -305,7 +326,7 @@ def draw_window(px, py):
 
 
 # ---------------------------------------------------------
-# GAME LOOP
+# MAIN GAME LOOP (with smooth UFO AI)
 # ---------------------------------------------------------
 def main_game():
     global bullets, enemies, meteors, planets, small_explosions
@@ -328,8 +349,13 @@ def main_game():
     enemy_timer = 0
     meteor_timer = 0
 
+    UFO_AVOID_COOLDOWN = 300
+    ufo_avoid_timer = 0
+
     while True:
         clock.tick(FPS)
+        now = pygame.time.get_ticks()
+
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 update_stats(score, kills)
@@ -339,7 +365,6 @@ def main_game():
             update_pause(px, py)
             if not paused and lives <= 0:
                 update_stats(score, kills)
-                # show game over
                 result = game_over_screen(score, kills)
                 if result == "RESTART":
                     return "RESTART"
@@ -352,59 +377,90 @@ def main_game():
         if keys[pygame.K_LEFT] and px > 0: px -= 5
         if keys[pygame.K_RIGHT] and px < WIDTH - SHIP.get_width(): px += 5
         if keys[pygame.K_SPACE] and len(bullets) < 7:
-            bullets.append([px + 40, py])
+            bullets.append([px + SHIP.get_width()//2 - 4, py])
 
-        # Bullets
+        # BULLETS
         for b in bullets[:]:
             b[1] -= 10
-            if b[1] < -20:
+            if b[1] < -40:
                 bullets.remove(b)
 
-        # Planets
-        if distance_traveled % random.randint(800, 1400) < 5:
-            planets.append([random.randint(60, WIDTH-200), -200, random.choice(PLANETS)])
+        # ---------------------------------------------------------
+        # PLANETS (NO OVERLAP)
+        # ---------------------------------------------------------
+        if distance_traveled % random.randint(900, 1600) < 5:
+            sprite = random.choice(PLANETS)
+            placed = False
+            for attempt in range(25):
+                x = random.randint(80, WIDTH - sprite.get_width() - 80)
+                y = random.randint(-350, -200)
+                if can_place_planet(x, y, sprite):
+                    planets.append([x, y, sprite])
+                    placed = True
+                    break
 
         for p in planets[:]:
             p[1] += 2
-            if p[1] > HEIGHT + 200:
+            if p[1] > HEIGHT + 250:
                 planets.remove(p)
 
-        # UFOs
+        # ---------------------------------------------------------
+        # UFOs — SMOOTH MOVEMENT FIX
+        # ---------------------------------------------------------
         enemy_timer += 1
         if enemy_timer > 120:
-            enemies.append([random.randint(60, WIDTH-100), -80])
+            enemies.append([random.randint(60, WIDTH-100), -80, 0])  # add drift dir
             enemy_timer = 0
 
         for e in enemies[:]:
-            ox = e[0]
+            ex, ey, drift = e
 
-            if e[0] < px: e[0] += 2
-            elif e[0] > px: e[0] -= 2
+            # Smooth chase: curved alignment
+            if ex < px - 15:
+                ex += 1.5
+            elif ex > px + 15:
+                ex -= 1.5
+            else:
+                ex += (px - ex) * 0.03
 
-            if ufo_collides_planet(e[0], e[1]):
-                e[0] = ox
-                e[0] += 3 if random.random() < 0.5 else -3
-                if ufo_collides_planet(e[0], e[1]):
-                    e[0] = ox
+            # Avoidance cooldown
+            if now - ufo_avoid_timer < UFO_AVOID_COOLDOWN:
+                ex += drift * 1.2
+            else:
+                if ufo_collides_planet(ex, ey):
+                    drift = 1 if random.random() < 0.5 else -1
+                    ufo_avoid_timer = now
 
-            e[1] += 2
-            if e[1] > HEIGHT:
+            # limit ufo drifting inside screen
+            ex = max(40, min(WIDTH - 140, ex))
+
+            ey += 2
+            if ey > HEIGHT:
                 enemies.remove(e)
+                continue
 
-            e_rect = pygame.Rect(e[0], e[1], 90, 60)
+            # update
+            e[0], e[1], e[2] = ex, ey, drift
+
+            # bullet collision
+            enemy_rect = pygame.Rect(ex, ey, 90, 60)
             for b in bullets[:]:
-                if e_rect.colliderect(pygame.Rect(b[0], b[1], 10, 20)):
-                    small_explosions.append([e[0], e[1], pygame.time.get_ticks()])
+                if enemy_rect.colliderect(pygame.Rect(b[0], b[1], 10, 20)):
+                    small_explosions.append([ex, ey, now])
                     enemies.remove(e)
                     bullets.remove(b)
                     score += 20
                     kills += 1
                     break
 
+        # REMOVE SMALL EXPLOSIONS
         for ex in small_explosions[:]:
-            if pygame.time.get_ticks() - ex[2] > 220:
+            if now - ex[2] > 240:
                 small_explosions.remove(ex)
 
+        # ---------------------------------------------------------
+        # METEORS
+        # ---------------------------------------------------------
         meteor_timer += 1
         if meteor_timer > 240:
             meteors.append([WIDTH + 50, -50])
@@ -413,28 +469,29 @@ def main_game():
         for m in meteors[:]:
             m[0] -= 3
             m[1] += 4
-            if m[1] > HEIGHT + 200:
+            if m[1] > HEIGHT + 220:
                 meteors.remove(m)
 
-        if invincible and pygame.time.get_ticks() - inv_timer > 1500:
+        # INVINCIBLE WINDOW
+        if invincible and now - inv_timer > 1500:
             invincible = False
 
         ship_rect = pygame.Rect(px, py, SHIP.get_width(), SHIP.get_height())
 
-        for m in meteors[:]:
+        for m in meteors:
             if ship_rect.colliderect(pygame.Rect(m[0], m[1], 80, 80)) and not invincible:
                 lives -= 1
                 start_life_lost_pause(px, py)
                 break
 
-        for p in planets[:]:
-            if ship_rect.collidepoint(p[0]+50, p[1]+50) and not invincible:
+        for p in planets:
+            if ship_rect.colliderect(pygame.Rect(p[0], p[1], p[2].get_width(), p[2].get_height())) and not invincible:
                 lives -= 1
                 start_life_lost_pause(px, py)
                 break
 
-        for e in enemies[:]:
-            if ship_rect.colliderect(pygame.Rect(e[0], e[1], 90, 60)) and not invincible:
+        for ex, ey, drift in enemies:
+            if ship_rect.colliderect(pygame.Rect(ex, ey, 90, 60)) and not invincible:
                 lives -= 1
                 start_life_lost_pause(px, py)
                 break
@@ -443,7 +500,7 @@ def main_game():
 
 
 # ---------------------------------------------------------
-# MAIN PROGRAM LOOP
+# MAIN LOOP
 # ---------------------------------------------------------
 if __name__ == "__main__":
     init_db()
@@ -452,6 +509,5 @@ if __name__ == "__main__":
         homepage_screen()
         result = main_game()
 
-        # If player pressed RESTART on game over screen
         if result == "RESTART":
             continue
